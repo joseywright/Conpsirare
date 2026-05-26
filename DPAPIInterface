@@ -21,8 +21,7 @@ let eventName = inputConfig.eventName || "";
 // ----------------------------
 
 // PASTE YOUR NEW API KEY HERE
-const API_KEY = "PASTE_NEW_API_KEY_HERE";
-
+const API_KEY = "XXXXXX"
 // Airtable table
 const table = base.getTable("Form Responses");
 
@@ -50,15 +49,15 @@ function escapeDP(value) {
 // Update Airtable status fields
 async function updateStatus(status, message, matchCount = null) {
   let updateFields = {
-    "DP Sync Status": status,
+   "DP Sync Status": { name: status },
     "DP Sync Message": message,
     "Last Sync Attempt": new Date().toISOString()
   };
-
   // Only update if field exists
   try {
     updateFields["DP Match Count"] = matchCount;
   } catch (e) {}
+
 
   await table.updateRecordAsync(recordId, updateFields);
 }
@@ -265,5 +264,4 @@ try {
   );
 
 }
-
 
