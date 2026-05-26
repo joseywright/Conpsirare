@@ -21,7 +21,8 @@ let eventName = inputConfig.eventName || "";
 // ----------------------------
 
 // PASTE YOUR NEW API KEY HERE
-const API_KEY = "XXXXXX"
+const API_KEY = "XXXXX";
+
 // Airtable table
 const table = base.getTable("Form Responses");
 
@@ -62,18 +63,6 @@ async function updateStatus(status, message, matchCount = null) {
   await table.updateRecordAsync(recordId, updateFields);
 }
 
-// Parse XML field values
-function getFieldValue(recordNode, fieldName) {
-  let fields = recordNode.getElementsByTagName("field");
-
-  for (let field of fields) {
-    if (field.getAttribute("name") === fieldName) {
-      return field.getAttribute("value");
-    }
-  }
-
-  return null;
-}
 
 // ----------------------------
 // MAIN PROCESS
@@ -113,13 +102,9 @@ try {
 
   let searchXML = await searchResponse.text();
 
-  let parser = new DOMParser();
+  let recordMatches = [...searchXML.matchAll(/<record>/g)];
 
-  let searchDoc = parser.parseFromString(searchXML, "text/xml");
-
-  let records = searchDoc.getElementsByTagName("record");
-
-  let matchCount = records.length;
+  let matchCount = recordMatches.length;
 
   // ---------------------------------
   // MULTIPLE MATCHES → REVIEW
@@ -141,12 +126,26 @@ try {
   // ---------------------------------
   // EXACTLY ONE MATCH
   // ---------------------------------
+ if (matchCount === 1) {
+  
+  let donorIdMatch = searchXML.match(
+  /name='donor_id'.*?value='(.*?)'/s
+);
 
-  if (matchCount === 1) {
+  if (donorIdMatch && donorIdMatch[1]) {
+    donorId = donorIdMatch[1];
+  } else {
 
-    donorId = getFieldValue(records[0], "donor_id");
+    await updateStatus(
+      "FAILED",
+      `Could not extract donor ID from search response: ${searchXML}`,
+      matchCount
+    );
 
+    return;
   }
+
+}
 
   // ---------------------------------
   // NO MATCH → CREATE DONOR
@@ -191,26 +190,20 @@ try {
 
     let createXML = await createResponse.text();
 
-    let createDoc = parser.parseFromString(createXML, "text/xml");
+    let donorIdMatch = createXML.match(/value="([^"]+)"/);
 
-    let createRecord =
-      createDoc.getElementsByTagName("record")[0];
+  if (!donorIdMatch) {
 
-    if (!createRecord) {
+  await updateStatus(
+    "FAILED",
+    `Donor creation response: ${createXML}`,
+    0
+  );
 
-      await updateStatus(
-        "FAILED",
-        "Donor creation failed. No donor ID returned.",
-        0
-      );
+  return;
+}
 
-      return;
-    }
-
-    let donorField =
-      createRecord.getElementsByTagName("field")[0];
-
-    donorId = donorField.getAttribute("value");
+donorId = donorIdMatch[1];
 
   }
 
@@ -235,10 +228,18 @@ try {
     `@by_whom='${USER_ID}',` +
     `@contact_date='${today}',` +
     `@comment='${escapeDP(commentText)}'`;
-
+  
   let contactResponse = await fetch(contactURL);
 
   let contactXML = await contactResponse.text();
+
+  await updateStatus(
+  "FAILED",
+  `CONTACT RESPONSE: ${contactXML}`,
+  matchCount
+);
+
+return; //Temporary debugging stop
 
   // ---------------------------------
   // SUCCESS
@@ -264,4 +265,3 @@ try {
   );
 
 }
-
