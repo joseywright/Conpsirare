@@ -1,6 +1,5 @@
 // ============================================
 // DONORPERFECT AIRTABLE INTEGRATION
-// By Josephina Wright
 // ============================================
 
 // ----------------------------
@@ -21,8 +20,7 @@ let eventName = inputConfig.eventName || "";
 // ----------------------------
 
 // PASTE YOUR NEW API KEY HERE
-const API_KEY = "XXXXX";
-
+const API_KEY = "XXXXXXX"
 // Airtable table
 const table = base.getTable("Form Responses");
 
@@ -217,17 +215,22 @@ donorId = donorIdMatch[1];
   let today =
     new Date().toISOString().split("T")[0];
 
-  let contactURL =
-    `${DP_ENDPOINT}?apikey=${API_KEY}` +
-    `&action=dp_savecontact` +
-    `&params=` +
-    `@contact_id=0,` +
-    `@donor_id=${donorId},` +
-    `@activity_code='${ACTIVITY_CODE}',` +
-    `@mailing_code=null,` +
-    `@by_whom='${USER_ID}',` +
-    `@contact_date='${today}',` +
-    `@comment='${escapeDP(commentText)}'`;
+ let contactURL =
+  `${DP_ENDPOINT}?apikey=${API_KEY}` +
+  `&action=dp_savecontact` +
+  `&params=` +
+  `@contact_id=0,` +
+  `@donor_id=${donorId},` +
+  `@activity_code='${ACTIVITY_CODE}',` +
+  `@mailing_code=null,` +
+  `@by_whom='${USER_ID}',` +
+  `@contact_date='${today}',` +
+  `@due_date=null,` +
+  `@due_time=null,` +
+  `@completed_date=null,` +
+  `@document_path=null,` +
+  `@comment='${escapeDP(commentText)}',` +
+  `@user_id='${USER_ID}'`;
   
   let contactResponse = await fetch(contactURL);
 
@@ -239,7 +242,7 @@ donorId = donorIdMatch[1];
   matchCount
 );
 
-return; //Temporary debugging stop
+
 
   // ---------------------------------
   // SUCCESS
