@@ -13,14 +13,14 @@ let lastName = inputConfig.lastName || "";
 let email = inputConfig.email || "";
 let zipCode = inputConfig.zipCode || "";
 let rsvp = inputConfig.rsvp || "";
-let eventName = inputConfig.eventName || "";
+let eventName = "Test Event";
 
 // ----------------------------
 // CONFIGURATION
 // ----------------------------
 
 // PASTE YOUR NEW API KEY HERE
-const API_KEY = "XXXXXXX"
+const API_KEY = "XXX"
 // Airtable table
 const table = base.getTable("Form Responses");
 
@@ -28,8 +28,7 @@ const table = base.getTable("Form Responses");
 const DP_ENDPOINT =
   "https://www.donorperfect.net/prod/xmlrequest.asp";
 
-// Activity code already created in DP
-const ACTIVITY_CODE = "TEST_API_INTEGRATION";
+
 
 // Optional reference name for API activity logs
 const USER_ID = "AirtableIntegration";
@@ -76,6 +75,20 @@ try {
   let safeLastName = escapeDP(lastName);
   let safeZip = escapeDP(zipCode);
 
+  // Determine activity code from RSVP
+  let activityCode = null;
+
+  if (rsvp.toLowerCase() === "yes") {
+    activityCode = "TEST_EVENT_RSVP_YES";
+  }
+  else if (rsvp.toLowerCase() === "no") {
+    activityCode = "TEST_EVENT_RSVP_NO";
+  }
+  else {
+    throw new Error(`Unexpected RSVP value: ${rsvp}`);
+  }
+   
+   
   // ---------------------------------
   // SEARCH DONORPERFECT
   // ---------------------------------
@@ -127,8 +140,8 @@ try {
  if (matchCount === 1) {
   
   let donorIdMatch = searchXML.match(
-  /name='donor_id'.*?value='(.*?)'/s
-);
+    /name='donor_id'.*?value='(.*?)'/s
+  );
 
   if (donorIdMatch && donorIdMatch[1]) {
     donorId = donorIdMatch[1];
@@ -142,7 +155,6 @@ try {
 
     return;
   }
-
 }
 
   // ---------------------------------
@@ -186,22 +198,22 @@ try {
 
     let createResponse = await fetch(createDonorURL);
 
-    let createXML = await createResponse.text();
+  let createXML = await createResponse.text();
 
-    let donorIdMatch = createXML.match(/value="([^"]+)"/);
+  let donorIdMatch = createXML.match(/value=['"](\d+)['"]/);
 
   if (!donorIdMatch) {
 
-  await updateStatus(
-    "FAILED",
-    `Donor creation response: ${createXML}`,
-    0
-  );
+   await updateStatus(
+     "FAILED",
+     `Donor creation response: ${createXML}`,
+     0
+   );
 
-  return;
-}
+   return;
+  }
 
-donorId = donorIdMatch[1];
+  donorId = donorIdMatch[1];
 
   }
 
@@ -215,13 +227,22 @@ donorId = donorIdMatch[1];
   let today =
     new Date().toISOString().split("T")[0];
 
+await updateStatus(
+  "FAILED",
+  `RSVP = ${rsvp} | Activity Code = ${activityCode}`,
+  matchCount
+);
+
+  //return;  //temporary debugging, uncomment if you want the output to be something like "RSVP = Yes | Activity Code = TEST_EVENT_RSVP_YES"
+
+
  let contactURL =
   `${DP_ENDPOINT}?apikey=${API_KEY}` +
   `&action=dp_savecontact` +
   `&params=` +
   `@contact_id=0,` +
   `@donor_id=${donorId},` +
-  `@activity_code='${ACTIVITY_CODE}',` +
+  `@activity_code='${activityCode}',` +
   `@mailing_code=null,` +
   `@by_whom='${USER_ID}',` +
   `@contact_date='${today}',` +
