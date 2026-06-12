@@ -1,6 +1,7 @@
 # Conpsirare
 # DonorPerfect Airtable Integration Workflow
 
+# FormSubmissionDPAPIInterface Script 
 ## 1. Receive Input from Airtable
 
 Retrieve the following values from the Airtable record:
@@ -234,6 +235,8 @@ Also store:
 
 * Match Count (if applicable)
 * Timestamp of Sync Attempt
+* Last Synched RSVP field  (for RecordUpdateDPAPIInterface script to find)
+* Last Synched Attended field (for RecordUpdateDPAPIInterface script to find)
 
 ---
 
@@ -248,3 +251,310 @@ If any unexpected error occurs during processing:
    * Message = Error text
    * Match Count = `0`
    * Last Sync Attempt = Current Timestamp
+
+# RecordUpdateDPAPIInterface Script 
+   
+# RecordUpdateDPAPIInterface Script
+
+## 1. Receive Input from Airtable
+
+Retrieve the following values from the Airtable record:
+
+* Record ID
+* First Name
+* Last Name
+* Email
+* Zip Code
+* RSVP Response
+* Attended Event
+* Last Synced RSVP
+* Last Synced Attendance
+
+Set the event name:
+
+* `Test Event`
+
+---
+
+## 2. Prepare Data
+
+* Escape apostrophes in all text fields to prevent DonorPerfect query errors.
+* Define required configuration values:
+
+  * DonorPerfect API Endpoint
+  * API Key
+  * User ID (`AirtableIntegration`)
+* Connect to the Airtable table:
+
+  * `Form Responses`
+
+---
+
+## 3. Determine Whether a Sync Is Required
+
+The script compares current values to previously synced values.
+
+### RSVP Changed
+
+If the RSVP value differs from `Last Synced RSVP`:
+
+| RSVP Value | Activity Code         |
+| ---------- | --------------------- |
+| Yes        | `TEST_EVENT_RSVP_YES` |
+| No         | `TEST_EVENT_RSVP_NO`  |
+
+Create a contact comment:
+
+```text
+Event: Test Event | RSVP: [Value]
+```
+
+---
+
+### Attendance Marked Yes
+
+If:
+
+```text
+Attended Event = Yes
+AND
+Last Synced Attendance ≠ Yes
+```
+
+Create:
+
+| Activity Code         |
+| --------------------- |
+| `TEST_EVENT_ATTENDED` |
+
+Create a contact comment:
+
+```text
+Event: Test Event | Attended
+```
+
+---
+
+### Attendance Marked No
+
+If:
+
+```text
+Attended Event = No
+AND
+Last Synced Attendance ≠ No
+```
+
+The script:
+
+* Updates `Last Synced Attendance` to `No`
+* Does not create a DonorPerfect contact record
+* Marks the sync as successful
+
+---
+
+### No Changes Detected
+
+If neither RSVP nor Attendance require syncing:
+
+* No DonorPerfect API call is made
+* Sync status is updated to:
+
+```text
+SUCCESS
+No changes requiring DonorPerfect sync.
+```
+
+---
+
+## 4. Search for a Matching Donor
+
+### Primary Match
+
+Search DonorPerfect using SQL:
+
+```text
+Email + Last Name
+```
+
+---
+
+### Secondary Match
+
+If no donor is found:
+
+```text
+Email + Last Name + First Name
+```
+
+---
+
+### Fallback Match
+
+If SQL searches fail, use DonorPerfect's standard donor search:
+
+```text
+First Name + Last Name + Zip Code
+```
+
+---
+
+### Match Outcomes
+
+#### Single Match Found
+
+Proceed with contact creation.
+
+---
+
+#### Multiple Matches Found
+
+Update Airtable:
+
+```text
+DP Sync Status = REVIEW
+```
+
+Message:
+
+```text
+Multiple donor matches found.
+Manual review required.
+```
+
+---
+
+#### No Match Found
+
+Update Airtable:
+
+```text
+DP Sync Status = REVIEW
+```
+
+Message:
+
+```text
+No matching donor found in DonorPerfect.
+```
+
+---
+
+## 5. Create DonorPerfect Contact Record
+
+If a donor match is found, create a new contact record using:
+
+```text
+action=dp_savecontact
+```
+
+Fields submitted:
+
+| Field            | Value                    |
+| ---------------- | ------------------------ |
+| `contact_id`     | `0`                      |
+| `donor_id`       | Matched donor            |
+| `activity_code`  | Determined activity code |
+| `mailing_code`   | `null`                   |
+| `by_whom`        | `AirtableIntegration`    |
+| `contact_date`   | Today's Date             |
+| `due_date`       | `null`                   |
+| `due_time`       | `null`                   |
+| `completed_date` | `null`                   |
+| `document_path`  | `null`                   |
+| `comment`        | Event comment text       |
+| `user_id`        | `AirtableIntegration`    |
+
+---
+
+## 6. Verify Contact Creation
+
+The script examines the DonorPerfect response for a valid Contact ID.
+
+### Contact Created Successfully
+
+Continue processing.
+
+---
+
+### Contact Creation Failed
+
+Update Airtable:
+
+```text
+DP Sync Status = FAILED
+```
+
+Store the full DonorPerfect response in:
+
+```text
+DP Sync Message
+```
+
+This allows troubleshooting of API errors.
+
+---
+
+## 7. Update Airtable Sync Tracking Fields
+
+### RSVP Sync
+
+If an RSVP activity was created:
+
+```text
+Last Synced RSVP = Current RSVP
+```
+
+---
+
+### Attendance Sync
+
+If an attendance activity was created:
+
+```text
+Last Synced Attendance = Yes
+```
+
+---
+
+## 8. Record Success Status
+
+Update Airtable:
+
+```text
+DP Sync Status = SUCCESS
+```
+
+Example message:
+
+```text
+Contact record added successfully.
+Donor ID: 12345
+Activity Code: TEST_EVENT_RSVP_YES
+```
+
+The script also records:
+
+```text
+Last Sync Attempt
+DP Match Count
+```
+
+when applicable.
+
+---
+
+## 9. Error Handling
+
+Any unexpected error is caught and written back to Airtable.
+
+Updates:
+
+```text
+DP Sync Status = FAILED
+DP Sync Message = [Error Details]
+DP Match Count = 0
+Last Sync Attempt = [Timestamp]
+```
+
+This ensures all failures are visible directly from the Airtable record.
