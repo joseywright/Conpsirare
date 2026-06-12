@@ -1,0 +1,439 @@
+// ============================================
+// DONORPERFECT AIRTABLE INTEGRATION
+// RECORD UPDATE AUTOMATION
+// ============================================
+
+// ----------------------------
+// INPUT VARIABLES
+// ----------------------------
+let inputConfig = input.config();
+
+let recordId = inputConfig.recordId;
+
+let firstName = inputConfig.firstName || "";
+let lastName = inputConfig.lastName || "";
+let email = inputConfig.email || "";
+let zipCode = inputConfig.zipCode || "";
+
+let rsvp = inputConfig.rsvp || "";
+let attendedEvent = inputConfig.attendedEvent || "";
+
+let lastSyncedRsvp =
+  inputConfig.lastSyncedRsvp || "";
+
+let lastSyncedAttendance =
+  inputConfig.lastSyncedAttendance || "";
+
+let eventName = "Test Event";
+
+// ----------------------------
+// CONFIGURATION
+// ----------------------------
+const API_KEY = "XXX";
+
+const DP_ENDPOINT =
+  "https://www.donorperfect.net/prod/xmlrequest.asp";
+
+const USER_ID = "AirtableIntegration";
+
+const table =
+  base.getTable("Form Responses");
+
+// ----------------------------
+// HELPERS
+// ----------------------------
+function escapeDP(value) {
+  if (!value) return "";
+  return value.replace(/'/g, "''");
+}
+
+async function updateStatus(
+  status,
+  message,
+  matchCount = null
+) {
+
+  let updateFields = {
+    "DP Sync Status": { name: status },
+    "DP Sync Message": message,
+    "Last Sync Attempt":
+      new Date().toISOString()
+  };
+
+  try {
+    updateFields["DP Match Count"] =
+      matchCount;
+  } catch (e) {}
+
+  await table.updateRecordAsync(
+    recordId,
+    updateFields
+  );
+}
+
+function parseDonorId(xml) {
+  let match =
+    xml.match(/donor_id.*?value='(\d+)'/);
+
+  return match ? match[1] : null;
+}
+
+// ----------------------------
+// SQL SEARCH
+// ----------------------------
+async function sqlSearch(
+  email,
+  lastName,
+  firstName = null
+) {
+
+  let whereClause =
+    `email='${escapeDP(email)}' and last_name='${escapeDP(lastName)}'`;
+
+  if (firstName) {
+    whereClause +=
+      ` and first_name='${escapeDP(firstName)}'`;
+  }
+
+  let url =
+    `${DP_ENDPOINT}?apikey=${API_KEY}` +
+    `&action=select donor_id from dp where ${whereClause}`;
+
+  let res = await fetch(url);
+  let xml = await res.text();
+
+  return {
+    donorId: parseDonorId(xml),
+    raw: xml
+  };
+}
+
+// ----------------------------
+// FALLBACK SEARCH
+// ----------------------------
+async function dpSearch(
+  firstName,
+  lastName,
+  zip
+) {
+
+  let url =
+    `${DP_ENDPOINT}?apikey=${API_KEY}` +
+    `&action=dp_donorsearch` +
+    `&params=` +
+    `@donor_id=null,` +
+    `@last_name='${escapeDP(lastName)}',` +
+    `@first_name='${escapeDP(firstName)}',` +
+    `@opt_line=null,` +
+    `@address=null,` +
+    `@city=null,` +
+    `@state=null,` +
+    `@zip='${escapeDP(zip)}',` +
+    `@country=null,` +
+    `@filter_id=null,` +
+    `@user_id='${USER_ID}'`;
+
+  let res = await fetch(url);
+  let xml = await res.text();
+
+  let matches =
+    [...xml.matchAll(/<record>/g)];
+
+  let count = matches.length;
+
+  if (count > 1) {
+    return {
+      status: "REVIEW",
+      matchCount: count
+    };
+  }
+
+  if (count === 1) {
+    return {
+      status: "FOUND",
+      matchCount: 1,
+      donorId: parseDonorId(xml)
+    };
+  }
+
+  return {
+    status: "NONE",
+    matchCount: 0
+  };
+}
+
+// ----------------------------
+// MAIN
+// ----------------------------
+try {
+
+  let activityCode = null;
+  let commentText = null;
+  let syncType = null;
+
+  // ----------------------------
+  // RSVP CHANGED
+  // ----------------------------
+
+  if (
+    rsvp &&
+    rsvp !== lastSyncedRsvp
+  ) {
+
+    syncType = "RSVP";
+
+    if (
+      rsvp.toLowerCase() === "yes"
+    ) {
+
+      activityCode =
+        "TEST_EVENT_RSVP_YES";
+
+    } else if (
+      rsvp.toLowerCase() === "no"
+    ) {
+
+      activityCode =
+        "TEST_EVENT_RSVP_NO";
+
+    } else {
+
+      throw new Error(
+        `Unexpected RSVP value: ${rsvp}`
+      );
+    }
+
+    commentText =
+      `Event: ${eventName} | RSVP: ${rsvp}`;
+  }
+
+  // ----------------------------
+  // ATTENDANCE MARKED YES
+  // ----------------------------
+
+  else if (
+    attendedEvent === "Yes" &&
+    lastSyncedAttendance !== "Yes"
+  ) {
+
+    syncType = "ATTENDANCE";
+
+    activityCode =
+      "TEST_EVENT_ATTENDED";
+
+    commentText =
+      `Event: ${eventName} | Attended`;
+  }
+
+  // ----------------------------
+  // ATTENDANCE MARKED NO
+  // ----------------------------
+
+  else if (
+    attendedEvent === "No" &&
+    lastSyncedAttendance !== "No"
+  ) {
+
+    await table.updateRecordAsync(
+      recordId,
+      {
+        "Last Synced Attendance":
+          "No"
+      }
+    );
+
+    await updateStatus(
+      "SUCCESS",
+      "Attendance marked No. No DonorPerfect contact record created."
+    );
+
+    return;
+  }
+
+  // ----------------------------
+  // NOTHING TO DO
+  // ----------------------------
+
+  else {
+
+    await updateStatus(
+      "SUCCESS",
+      "No changes requiring DonorPerfect sync."
+    );
+
+    return;
+  }
+
+  // ----------------------------
+  // MATCH DONOR
+  // ----------------------------
+
+  let result =
+    await sqlSearch(
+      email,
+      lastName
+    );
+
+  let donorId =
+    result.donorId;
+
+  if (!donorId) {
+
+    result =
+      await sqlSearch(
+        email,
+        lastName,
+        firstName
+      );
+
+    donorId =
+      result.donorId;
+  }
+
+  let matchCount = null;
+
+  if (!donorId) {
+
+    let fallback =
+      await dpSearch(
+        firstName,
+        lastName,
+        zipCode
+      );
+
+    matchCount =
+      fallback.matchCount;
+
+    if (
+      fallback.status ===
+      "REVIEW"
+    ) {
+
+      await updateStatus(
+        "REVIEW",
+        `Multiple donor matches found (${matchCount}). Manual review required.`,
+        matchCount
+      );
+
+      return;
+    }
+
+    donorId =
+      fallback.donorId;
+  }
+
+  // ----------------------------
+  // NO DONOR FOUND
+  // ----------------------------
+
+  if (!donorId) {
+
+    await updateStatus(
+      "REVIEW",
+      "No matching donor found in DonorPerfect.",
+      matchCount ?? 0
+    );
+
+    return;
+  }
+
+  // ----------------------------
+  // CREATE CONTACT
+  // ----------------------------
+
+  let today =
+    new Date()
+      .toISOString()
+      .split("T")[0];
+
+  let contactURL =
+    `${DP_ENDPOINT}?apikey=${API_KEY}` +
+    `&action=dp_savecontact` +
+    `&params=` +
+    `@contact_id=0,` +
+    `@donor_id=${donorId},` +
+    `@activity_code='${activityCode}',` +
+    `@mailing_code=null,` +
+    `@by_whom='${USER_ID}',` +
+    `@contact_date='${today}',` +
+    `@due_date=null,` +
+    `@due_time=null,` +
+    `@completed_date=null,` +
+    `@document_path=null,` +
+    `@comment='${escapeDP(commentText)}',` +
+    `@user_id='${USER_ID}'`;
+
+  let contactResponse =
+    await fetch(contactURL);
+
+  let contactXML =
+    await contactResponse.text();
+
+  let contactIdMatch =
+    contactXML.match(
+      /value=['"](\d+)['"]/
+    );
+
+  if (!contactIdMatch) {
+
+    await updateStatus(
+      "FAILED",
+      `CONTACT RESPONSE: ${contactXML}`,
+      matchCount
+    );
+
+    return;
+  }
+
+  // ----------------------------
+  // UPDATE SYNC FIELDS
+  // ----------------------------
+
+  let fieldsToUpdate = {};
+
+  if (syncType === "RSVP") {
+
+    fieldsToUpdate[
+      "Last Synced RSVP"
+    ] = rsvp;
+  }
+
+  if (
+    syncType ===
+    "ATTENDANCE"
+  ) {
+
+    fieldsToUpdate[
+      "Last Synced Attendance"
+    ] = "Yes";
+  }
+
+  if (
+    Object.keys(fieldsToUpdate)
+      .length > 0
+  ) {
+
+    await table.updateRecordAsync(
+      recordId,
+      fieldsToUpdate
+    );
+  }
+
+  // ----------------------------
+  // SUCCESS
+  // ----------------------------
+
+  await updateStatus(
+    "SUCCESS",
+    `Contact record added successfully. Donor ID: ${donorId}. Activity Code: ${activityCode}`,
+    matchCount
+  );
+
+} catch (error) {
+
+  await updateStatus(
+    "FAILED",
+    error.toString(),
+    0
+  );
+}
