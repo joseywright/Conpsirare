@@ -13,12 +13,27 @@ let lastName = inputConfig.lastName || "";
 let email = inputConfig.email || "";
 let zipCode = inputConfig.zipCode || "";
 let rsvp = inputConfig.rsvp || "";
-let eventName = "Test Event";
 
+//Pull values from 'Setup' able
+let setupTable = base.getTable("Setup");
+let setupQuery = await setupTable.selectRecordsAsync({
+    fields: [
+        "Configuration",
+        "Event Name",
+        "API Key",
+        "RSVP Yes Activity Code",
+        "RSVP No Activity Code",
+        "Attended Activity Code"
+    ]
+});
+
+let setup = setupQuery.records[0];
+
+let eventName = setup.getCellValueAsString("Event Name");
 // ----------------------------
 // CONFIGURATION
 // ----------------------------
-const API_KEY = "XXX";
+let API_KEY = setup.getCellValueAsString("API Key");
 const table = base.getTable("Form Responses");
 
 const DP_ENDPOINT =
@@ -138,13 +153,17 @@ try {
   // ----------------------------
   let activityCode;
 
-  if (rsvp.toLowerCase() === "yes") {
-    activityCode = "TEST_EVENT_RSVP_YES";
-  } else if (rsvp.toLowerCase() === "no") {
-    activityCode = "TEST_EVENT_RSVP_NO";
-  } else {
-    throw new Error(`Unexpected RSVP value: ${rsvp}`);
-  }
+let rsvpNormalized = (rsvp || "").toLowerCase();
+
+if (rsvpNormalized === "yes") {
+  activityCode = setup.getCellValueAsString("RSVP Yes Activity Code");
+} 
+else if (rsvpNormalized === "no") {
+  activityCode = setup.getCellValueAsString("RSVP No Activity Code");
+} 
+else {
+  throw new Error(`Unexpected RSVP value: ${rsvp}`);
+}
 
   // ----------------------------
   // STEP 1: SQL (email + last)
@@ -298,3 +317,4 @@ let finalMessage =
 } catch (error) {
   await updateStatus("FAILED", error.toString(), 0);
 }
+
