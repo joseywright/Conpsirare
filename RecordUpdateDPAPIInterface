@@ -1,3 +1,4 @@
+
 // ============================================
 // DONORPERFECT AIRTABLE INTEGRATION
 // RECORD UPDATE AUTOMATION
@@ -24,12 +25,32 @@ let lastSyncedRsvp =
 let lastSyncedAttendance =
   inputConfig.lastSyncedAttendance || "";
 
-let eventName = "Test Event";
+//pull data from Setup table on base
+let setupTable = base.getTable("Setup");
 
+let setupQuery = await setupTable.selectRecordsAsync({
+    fields: [
+        "Configuration",
+        "Event Name",
+        "API Key",
+        "RSVP Yes Activity Code",
+        "RSVP No Activity Code",
+        "Attended Activity Code"
+    ]
+});
+
+if (!setupQuery.records.length) {
+    throw new Error("Missing Setup configuration record");
+}
+
+let setup = setupQuery.records[0];
+
+//grab event name from Setup
+let eventName = setup.getCellValueAsString("Event Name");
 // ----------------------------
 // CONFIGURATION
 // ----------------------------
-const API_KEY = "XXX";
+let API_KEY = setup.getCellValueAsString("API Key");
 
 const DP_ENDPOINT =
   "https://www.donorperfect.net/prod/xmlrequest.asp";
@@ -186,15 +207,13 @@ try {
       rsvp.toLowerCase() === "yes"
     ) {
 
-      activityCode =
-        "TEST_EVENT_RSVP_YES";
+      activityCode = setup.getCellValueAsString("RSVP Yes Activity Code");
 
     } else if (
       rsvp.toLowerCase() === "no"
     ) {
 
-      activityCode =
-        "TEST_EVENT_RSVP_NO";
+      activityCode = setup.getCellValueAsString("RSVP No Activity Code");
 
     } else {
 
@@ -218,8 +237,7 @@ try {
 
     syncType = "ATTENDANCE";
 
-    activityCode =
-      "TEST_EVENT_ATTENDED";
+    activityCode = setup.getCellValueAsString("Attended Activity Code");
 
     commentText =
       `Event: ${eventName} | Attended`;
