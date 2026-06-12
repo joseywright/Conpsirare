@@ -277,6 +277,12 @@ if (!contactIdMatch) {
 
 let contactId = contactIdMatch[1];
 
+//Update the Last Synched Attended Field and Last Synched RSVP for the Record Edit Automation
+await table.updateRecordAsync(recordId, {
+  "Last Synced RSVP": rsvp,
+  "Last Synced Attendance": "To Be Filled Out"
+});
+
 let finalMessage =
     matchCount === 0
       ? `New donor created and contact record added. Donor ID: ${donorId}`
@@ -292,4 +298,3 @@ let finalMessage =
 } catch (error) {
   await updateStatus("FAILED", error.toString(), 0);
 }
-
