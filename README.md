@@ -252,8 +252,7 @@ If any unexpected error occurs during processing:
    * Match Count = `0`
    * Last Sync Attempt = Current Timestamp
 
-# RecordUpdateDPAPIInterface Script 
-   
+
 # RecordUpdateDPAPIInterface Script
 
 ## 1. Receive Input from Airtable
