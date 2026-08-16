@@ -1,0 +1,433 @@
+// ============================================
+// DONORPERFECT AIRTABLE INTEGRATION
+// NEW RSVP - MULTI-EVENT VERSION
+// ============================================
+
+// ----------------------------
+// INPUT VARIABLES
+// ----------------------------
+const inputConfig = input.config();
+
+const recordId = inputConfig.recordId;
+const firstName = inputConfig.firstName || "";
+const lastName = inputConfig.lastName || "";
+const email = inputConfig.email || "";
+const zipCode = inputConfig.zipCode || "";
+const rsvp = inputConfig.rsvp || "";
+
+const eventName = inputConfig.eventName || "";
+const rsvpYesActivityCode =
+    inputConfig.rsvpYesActivityCode || "";
+const rsvpNoActivityCode =
+    inputConfig.rsvpNoActivityCode || "";
+
+// ----------------------------
+// TABLES / CONFIGURATION
+// ----------------------------
+const table = base.getTable("RSVP Responses");
+
+const settingsTable =
+    base.getTable("Integration Settings");
+
+const settingsQuery =
+    await settingsTable.selectRecordsAsync({
+        fields: ["Configuration", "API Key"]
+    });
+
+const settings =
+    settingsQuery.records.find(
+        record =>
+            record.getCellValueAsString("Configuration") ===
+            "DonorPerfect"
+    );
+
+if (!settings) {
+    throw new Error(
+        "Missing DonorPerfect Integration Settings record."
+    );
+}
+
+const API_KEY =
+    settings.getCellValueAsString("API Key");
+
+if (!API_KEY) {
+    throw new Error("DonorPerfect API Key is missing.");
+}
+
+const DP_ENDPOINT =
+    "https://www.donorperfect.net/prod/xmlrequest.asp";
+
+const USER_ID = "AirtableIntegration";
+
+// ----------------------------
+// HELPERS
+// ----------------------------
+function escapeDP(value) {
+    if (!value) return "";
+    return String(value).replace(/'/g, "''");
+}
+
+async function updateStatus(
+    status,
+    message,
+    matchCount = null
+) {
+    const updateFields = {
+        "DP Sync Status": { name: status },
+        "DP Sync Message": message,
+        "Last Sync Attempt": new Date().toISOString()
+    };
+
+    if (matchCount !== null) {
+        updateFields["DP Match Count"] = matchCount;
+    }
+
+    await table.updateRecordAsync(
+        recordId,
+        updateFields
+    );
+}
+
+function parseDonorId(xml) {
+    const match =
+        xml.match(/donor_id.*?value=['"](\d+)['"]/);
+
+    return match ? match[1] : null;
+}
+
+// ----------------------------
+// SQL SEARCH
+// ----------------------------
+async function sqlSearch(
+    emailValue,
+    lastNameValue,
+    firstNameValue = null
+) {
+    let whereClause =
+        `email='${escapeDP(emailValue)}' ` +
+        `and last_name='${escapeDP(lastNameValue)}'`;
+
+    if (firstNameValue) {
+        whereClause +=
+            ` and first_name='${escapeDP(firstNameValue)}'`;
+    }
+
+    const url =
+        `${DP_ENDPOINT}?apikey=${API_KEY}` +
+        `&action=select donor_id from dp where ${whereClause}`;
+
+    const res = await fetch(url);
+    const xml = await res.text();
+
+    return {
+        donorId: parseDonorId(xml),
+        raw: xml
+    };
+}
+
+// ----------------------------
+// FALLBACK DONOR SEARCH
+// ----------------------------
+async function dpSearch(
+    firstNameValue,
+    lastNameValue,
+    zipValue
+) {
+    const url =
+        `${DP_ENDPOINT}?apikey=${API_KEY}` +
+        `&action=dp_donorsearch` +
+        `&params=` +
+        `@donor_id=null,` +
+        `@last_name='${escapeDP(lastNameValue)}',` +
+        `@first_name='${escapeDP(firstNameValue)}',` +
+        `@opt_line=null,` +
+        `@address=null,` +
+        `@city=null,` +
+        `@state=null,` +
+        `@zip='${escapeDP(zipValue)}',` +
+        `@country=null,` +
+        `@filter_id=null,` +
+        `@user_id='${USER_ID}'`;
+
+    const res = await fetch(url);
+    const xml = await res.text();
+
+    const donorMatches =
+        [...xml.matchAll(/donor_id.*?value=['"](\d+)['"]/g)];
+
+    const uniqueDonorIds =
+        [...new Set(donorMatches.map(match => match[1]))];
+
+    const count = uniqueDonorIds.length;
+
+    if (count > 1) {
+        return {
+            status: "REVIEW",
+            matchCount: count
+        };
+    }
+
+    if (count === 1) {
+        return {
+            status: "FOUND",
+            matchCount: 1,
+            donorId: uniqueDonorIds[0]
+        };
+    }
+
+    return {
+        status: "NONE",
+        matchCount: 0
+    };
+}
+
+// ----------------------------
+// MAIN
+// ----------------------------
+try {
+
+    if (!recordId) {
+        throw new Error("Missing Airtable record ID.");
+    }
+
+    if (!eventName) {
+        throw new Error("Missing Event Name.");
+    }
+
+    const safeFirst = escapeDP(firstName);
+    const safeLast = escapeDP(lastName);
+    const safeZip = escapeDP(zipCode);
+
+    // ----------------------------
+    // RSVP -> EVENT-SPECIFIC CODE
+    // ----------------------------
+    let activityCode;
+
+    const rsvpNormalized =
+        String(rsvp).trim().toLowerCase();
+
+    if (rsvpNormalized === "yes") {
+
+        activityCode = rsvpYesActivityCode;
+
+    } else if (rsvpNormalized === "no") {
+
+        activityCode = rsvpNoActivityCode;
+
+    } else {
+
+        throw new Error(
+            `Unexpected RSVP value: ${rsvp}`
+        );
+    }
+
+    if (!activityCode) {
+        throw new Error(
+            `Missing DonorPerfect activity code for RSVP "${rsvp}".`
+        );
+    }
+
+    // ----------------------------
+    // STEP 1: EMAIL + LAST NAME
+    // ----------------------------
+    let result =
+        await sqlSearch(
+            email,
+            lastName
+        );
+
+    let donorId = result.donorId;
+
+    // ----------------------------
+    // STEP 2: EMAIL + LAST + FIRST
+    // ----------------------------
+    if (!donorId) {
+        result =
+            await sqlSearch(
+                email,
+                lastName,
+                firstName
+            );
+
+        donorId = result.donorId;
+    }
+
+    // ----------------------------
+    // STEP 3: FALLBACK SEARCH
+    // ----------------------------
+    let matchCount = null;
+
+    if (!donorId) {
+
+        const fallback =
+            await dpSearch(
+                firstName,
+                lastName,
+                zipCode
+            );
+
+        matchCount =
+            fallback.matchCount;
+
+        if (fallback.status === "REVIEW") {
+
+            await updateStatus(
+                "REVIEW",
+                `Multiple donor matches found (${matchCount}). Manual review required.`,
+                matchCount
+            );
+
+            return;
+        }
+
+        donorId =
+            fallback.donorId;
+    }
+
+    // ----------------------------
+    // CREATE DONOR IF NONE FOUND
+    // ----------------------------
+    if (!donorId) {
+
+        const createURL =
+            `${DP_ENDPOINT}?apikey=${API_KEY}` +
+            `&action=dp_savedonor` +
+            `&params=` +
+            `@donor_id=0,` +
+            `@first_name='${safeFirst}',` +
+            `@last_name='${safeLast}',` +
+            `@middle_name=null,` +
+            `@suffix=null,` +
+            `@title=null,` +
+            `@salutation=null,` +
+            `@prof_title=null,` +
+            `@opt_line=null,` +
+            `@address=null,` +
+            `@address2=null,` +
+            `@city=null,` +
+            `@state=null,` +
+            `@zip='${safeZip}',` +
+            `@country='US',` +
+            `@address_type=null,` +
+            `@home_phone=null,` +
+            `@business_phone=null,` +
+            `@fax_phone=null,` +
+            `@mobile_phone=null,` +
+            `@email='${escapeDP(email)}',` +
+            `@org_rec='N',` +
+            `@donor_type='IN',` +
+            `@nomail='N',` +
+            `@nomail_reason=null,` +
+            `@narrative='Created via Airtable API Integration',` +
+            `@donor_rcpt_type='C',` +
+            `@user_id='${USER_ID}'`;
+
+        const res =
+            await fetch(createURL);
+
+        const xml =
+            await res.text();
+
+        const donorIdMatch =
+            xml.match(/value=['"](\d+)['"]/);
+
+        if (!donorIdMatch) {
+
+            await updateStatus(
+                "FAILED",
+                `Donor creation failed: ${xml}`,
+                0
+            );
+
+            return;
+        }
+
+        donorId =
+            donorIdMatch[1];
+
+        matchCount = 0;
+    }
+
+    // ----------------------------
+    // CREATE DP CONTACT ACTIVITY
+    // ----------------------------
+    const commentText =
+        `Event: ${eventName} | RSVP: ${rsvp}`;
+
+    const today =
+        new Date()
+            .toISOString()
+            .split("T")[0];
+
+    const contactURL =
+        `${DP_ENDPOINT}?apikey=${API_KEY}` +
+        `&action=dp_savecontact` +
+        `&params=` +
+        `@contact_id=0,` +
+        `@donor_id=${donorId},` +
+        `@activity_code='${escapeDP(activityCode)}',` +
+        `@mailing_code=null,` +
+        `@by_whom='${USER_ID}',` +
+        `@contact_date='${today}',` +
+        `@due_date=null,` +
+        `@due_time=null,` +
+        `@completed_date=null,` +
+        `@document_path=null,` +
+        `@comment='${escapeDP(commentText)}',` +
+        `@user_id='${USER_ID}'`;
+
+    const contactResponse =
+        await fetch(contactURL);
+
+    const contactXML =
+        await contactResponse.text();
+
+    const contactIdMatch =
+        contactXML.match(/value=['"](\d+)['"]/);
+
+    if (!contactIdMatch) {
+
+        await updateStatus(
+            "FAILED",
+            `CONTACT RESPONSE: ${contactXML}`,
+            matchCount
+        );
+
+        return;
+    }
+
+    // ----------------------------
+    // MARK CURRENT STATE AS SYNCED
+    // ----------------------------
+    await table.updateRecordAsync(
+        recordId,
+        {
+            "Last Synced RSVP": rsvp,
+            "Last Synced Attendance":
+                "To Be Filled Out"
+        }
+    );
+
+    const finalMessage =
+        matchCount === 0
+            ? `New donor created and contact record added. Donor ID: ${donorId}`
+            : `Existing donor matched and contact record added. Donor ID: ${donorId}`;
+
+    await updateStatus(
+        "SUCCESS",
+        finalMessage,
+        matchCount
+    );
+
+} catch (error) {
+
+    if (recordId) {
+        await updateStatus(
+            "FAILED",
+            error.toString(),
+            0
+        );
+    } else {
+        throw error;
+    }
+}
